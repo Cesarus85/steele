@@ -534,13 +534,13 @@ class RealSteelARGame {
                 relativeCamera.z *= -1;
             }
 
-            const target = i === 0 ? this.rightHandTarget : this.leftHandTarget;
+            const target = i === 0 ? this.leftHandTarget : this.rightHandTarget;
             target.copy(relativeCamera);
 
             if (i === 0) {
-                target.x = THREE.MathUtils.clamp(target.x, -0.2, 0.8);
-            } else {
                 target.x = THREE.MathUtils.clamp(target.x, -0.8, 0.2);
+            } else {
+                target.x = THREE.MathUtils.clamp(target.x, -0.2, 0.8);
             }
 
             target.y = THREE.MathUtils.clamp(target.y, 0.3, 1.6);
