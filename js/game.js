@@ -34,9 +34,9 @@ class RealSteelARGame {
         };
 
         // Hand targets for IK - initialize to forward boxing position
-        this.leftHandTarget = new THREE.Vector3(-0.3, 1.1, 0.3);
-        this.rightHandTarget = new THREE.Vector3(0.3, 1.1, 0.3);
-        this.currentForwardAxisLocal = new THREE.Vector3(0, 0, 1);
+        this.leftHandTarget = new THREE.Vector3(-0.3, 1.1, -0.3);
+        this.rightHandTarget = new THREE.Vector3(0.3, 1.1, -0.3);
+        this.currentForwardAxisLocal = new THREE.Vector3(0, 0, -1);
 
         this.init();
     }
@@ -515,7 +515,7 @@ class RealSteelARGame {
 
         const robotCameraPos = this.robotPosition.clone().applyMatrix4(cameraMatrixWorldInverse);
 
-        this.currentForwardAxisLocal = new THREE.Vector3(0, 0, facingRobot ? -1 : 1);
+        this.currentForwardAxisLocal = new THREE.Vector3(0, 0, -1);
 
         for (let i = 0; i < this.controllers.length; i++) {
             const controller = this.controllers[i];
@@ -580,7 +580,7 @@ class RealSteelARGame {
 
         const shoulderToHand = currentHandPos.clone().sub(shoulderPos);
         const forwardDistance = shoulderToHand.dot(forwardAxis);
-        const minForward = -0.3;
+        const minForward = 0;
         const maxForward = 0.8;
         const clampedForward = THREE.MathUtils.clamp(forwardDistance, minForward, maxForward);
         if (Math.abs(clampedForward - forwardDistance) > 1e-4) {
