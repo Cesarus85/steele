@@ -565,6 +565,8 @@ class RealSteelARGame {
         const elbow = arm.userData.elbow;
         const shoulder = arm.userData.shoulder;
 
+        const shoulderPos = shoulder.position.clone();
+
         // Get current hand position relative to robot
         const currentHandPos = hand.position.clone();
 
@@ -586,7 +588,6 @@ class RealSteelARGame {
         }
 
         // Two-bone IK calculation
-        const shoulderPos = shoulder.position.clone();
         const upperArmLength = 0.3;
         const forearmLength = 0.25;
         const totalArmLength = upperArmLength + forearmLength;
