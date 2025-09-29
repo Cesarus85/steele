@@ -36,6 +36,7 @@ class RealSteelARGame {
         // Hand targets for IK - initialize to forward boxing position
         this.leftHandTarget = new THREE.Vector3(-0.3, 1.1, 0.3);
         this.rightHandTarget = new THREE.Vector3(0.3, 1.1, 0.3);
+        this.currentForwardAxisLocal = new THREE.Vector3(0, 0, 1);
 
         this.init();
     }
@@ -490,48 +491,66 @@ class RealSteelARGame {
     updateHandTargets() {
         if (!this.robotPlaced) return;
 
-        // Create robot coordinate transformation matrix
-        const robotMatrix = new THREE.Matrix4();
-        robotMatrix.makeRotationY(this.robotRotation); // Positive rotation (robot's local space)
-        robotMatrix.setPosition(this.robotPosition);
-        const robotMatrixInverse = robotMatrix.clone().invert();
+        const xrCamera = this.renderer.xr.getCamera(this.camera);
+        if (!xrCamera) return;
 
-        // Check both controllers
+        const cameraMatrixWorldInverse = xrCamera.matrixWorld.clone().invert();
+        const cameraQuaternion = xrCamera.getWorldQuaternion(new THREE.Quaternion());
+
+        const cameraForward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+        cameraForward.y = 0;
+        if (cameraForward.lengthSq() < 1e-6) {
+            cameraForward.set(0, 0, -1);
+        }
+        cameraForward.normalize();
+        const cameraYaw = Math.atan2(cameraForward.x, cameraForward.z);
+
+        const yawDifference = this.normalizeAngle(cameraYaw - this.robotRotation);
+        const facingRobot = Math.abs(yawDifference) > Math.PI / 2;
+
+        const rotationToRobot = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 1, 0),
+            this.robotRotation - cameraYaw
+        );
+
+        const robotCameraPos = this.robotPosition.clone().applyMatrix4(cameraMatrixWorldInverse);
+
+        this.currentForwardAxisLocal = new THREE.Vector3(0, 0, facingRobot ? -1 : 1);
+
         for (let i = 0; i < this.controllers.length; i++) {
             const controller = this.controllers[i];
 
-            if (controller && controller.visible) {
-                const controllerPos = new THREE.Vector3();
-                controller.getWorldPosition(controllerPos);
+            if (!controller || !controller.visible) continue;
 
-                // Transform controller position to robot's local coordinate system
-                controllerPos.applyMatrix4(robotMatrixInverse);
+            const controllerWorldPos = new THREE.Vector3();
+            controller.getWorldPosition(controllerWorldPos);
 
-                // Determine which hand based on controller index and invert X for correct mapping
-                if (i === 0) {
-                    // Controller 0 = Right hand (invert X to match natural movement)
-                    this.rightHandTarget.copy(controllerPos);
-                    this.rightHandTarget.x = -controllerPos.x; // Invert X for natural mapping
+            const controllerCameraPos = controllerWorldPos.clone().applyMatrix4(cameraMatrixWorldInverse);
+            const relativeCamera = controllerCameraPos.sub(robotCameraPos);
+            relativeCamera.applyQuaternion(rotationToRobot);
 
-                    // Clamp to right side range (robot's perspective)
-                    this.rightHandTarget.x = Math.max(-0.2, Math.min(0.8, this.rightHandTarget.x));
-                    this.rightHandTarget.y = Math.max(0.3, Math.min(1.6, this.rightHandTarget.y));
-                    this.rightHandTarget.z = Math.max(-0.6, Math.min(0.8, this.rightHandTarget.z)); // Extended forward range
-
-                } else if (i === 1) {
-                    // Controller 1 = Left hand (invert X to match natural movement)
-                    this.leftHandTarget.copy(controllerPos);
-                    this.leftHandTarget.x = -controllerPos.x; // Invert X for natural mapping
-
-                    // Clamp to left side range (robot's perspective)
-                    this.leftHandTarget.x = Math.max(-0.8, Math.min(0.2, this.leftHandTarget.x));
-                    this.leftHandTarget.y = Math.max(0.3, Math.min(1.6, this.leftHandTarget.y));
-                    this.leftHandTarget.z = Math.max(-0.6, Math.min(0.8, this.leftHandTarget.z)); // Extended forward range
-                }
+            if (facingRobot) {
+                relativeCamera.x *= -1;
+                relativeCamera.z *= -1;
             }
+
+            const target = i === 0 ? this.rightHandTarget : this.leftHandTarget;
+            target.copy(relativeCamera);
+
+            if (i === 0) {
+                target.x = THREE.MathUtils.clamp(target.x, -0.2, 0.8);
+            } else {
+                target.x = THREE.MathUtils.clamp(target.x, -0.8, 0.2);
+            }
+
+            target.y = THREE.MathUtils.clamp(target.y, 0.3, 1.6);
+
+            const forwardAxis = this.currentForwardAxisLocal;
+            const forwardComponent = target.dot(forwardAxis);
+            const clampedForward = THREE.MathUtils.clamp(forwardComponent, -0.6, 0.8);
+            target.add(forwardAxis.clone().multiplyScalar(clampedForward - forwardComponent));
         }
 
-        // Apply IK to both arms in robot's local coordinate system
         this.updateArmIK('left', this.leftHandTarget);
         this.updateArmIK('right', this.rightHandTarget);
     }
@@ -553,13 +572,17 @@ class RealSteelARGame {
         const lerpFactor = 0.15;
         currentHandPos.lerp(target, lerpFactor);
 
-        // Allow hands to extend forward for punching, but prevent going behind robot
-        if (currentHandPos.z < -0.3) {
-            currentHandPos.z = -0.3; // Don't go too far back
-        }
-        // Extended forward range for punching
-        if (currentHandPos.z > 0.8) {
-            currentHandPos.z = 0.8; // Max punch extension
+        const forwardAxis = (this.currentForwardAxisLocal && this.currentForwardAxisLocal.lengthSq() > 0)
+            ? this.currentForwardAxisLocal.clone().normalize()
+            : new THREE.Vector3(0, 0, 1);
+
+        const shoulderToHand = currentHandPos.clone().sub(shoulderPos);
+        const forwardDistance = shoulderToHand.dot(forwardAxis);
+        const minForward = -0.3;
+        const maxForward = 0.8;
+        const clampedForward = THREE.MathUtils.clamp(forwardDistance, minForward, maxForward);
+        if (Math.abs(clampedForward - forwardDistance) > 1e-4) {
+            currentHandPos.add(forwardAxis.clone().multiplyScalar(clampedForward - forwardDistance));
         }
 
         // Two-bone IK calculation
@@ -576,9 +599,10 @@ class RealSteelARGame {
         const clampedDistance = Math.min(distance, totalArmLength * 0.95);
 
         if (clampedDistance < 0.1) {
-            // Too close, use default pose
             const defaultX = side === 'left' ? -0.3 : 0.3;
-            currentHandPos.set(defaultX, shoulderPos.y - 0.1, 0.2);
+            const defaultOffset = new THREE.Vector3(defaultX, -0.1, 0);
+            defaultOffset.add(forwardAxis.clone().multiplyScalar(0.2));
+            currentHandPos.copy(shoulderPos.clone().add(defaultOffset));
         }
 
         const direction = currentHandPos.clone().sub(shoulderPos).normalize();
@@ -589,8 +613,7 @@ class RealSteelARGame {
         // Start with direction from shoulder to hand
         elbowOffset.copy(direction);
 
-        // Add forward bias (positive Z)
-        elbowOffset.z += 0.5;
+        elbowOffset.add(forwardAxis.clone().multiplyScalar(0.5));
 
         // Add side bias for natural positioning
         const sideBias = side === 'left' ? -0.2 : 0.2;
@@ -601,9 +624,9 @@ class RealSteelARGame {
 
         const elbowPos = shoulderPos.clone().add(elbowOffset);
 
-        // Ensure elbow is forward of shoulder
-        if (elbowPos.z < shoulderPos.z) {
-            elbowPos.z = shoulderPos.z + 0.1;
+        const elbowForward = elbowPos.clone().sub(shoulderPos).dot(forwardAxis);
+        if (elbowForward < 0.1) {
+            elbowPos.add(forwardAxis.clone().multiplyScalar(0.1 - elbowForward));
         }
 
         // Update positions
@@ -657,6 +680,10 @@ class RealSteelARGame {
 
     updateRobotStatus(message) {
         document.getElementById('robotStatus').textContent = message;
+    }
+
+    normalizeAngle(angle) {
+        return THREE.MathUtils.euclideanModulo(angle + Math.PI, Math.PI * 2) - Math.PI;
     }
 }
 
